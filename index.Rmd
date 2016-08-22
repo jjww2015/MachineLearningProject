@@ -86,7 +86,7 @@ names(trainExtract)[highCorr]
 
 I built 4 random forests each with 100 trees. The importance of selected predictors are plotted. 
 
-``` {r rf, cache = TRUE,fig.height = 10, echo = FALSE}
+``` {r rf, cache = TRUE,fig.height = 8}
 #control <- trainControl(method="repeatedcv", number=5, repeats=3)
 # Random Forest
 set.seed(12234)
