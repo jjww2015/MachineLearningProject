@@ -1,0 +1,151 @@
+---
+title: "Qualitative activity recognization"
+subtitle: "-how well the activity is performed?"
+author: "Anonymous Student"
+date: "August 19, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(corrplot)
+library(doMC)
+registerDoMC(cores = 8) # my PC have 8 cores
+```
+
+##Background
+
+Using devices such as *Jawbone Up, Nike FuelBand*, and *Fitbit* it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal will be to use data from accelerometers on the **belt, forearm, arm**, and **dumbell** of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in **5** different ways. More information can be found [here](http://groupware.les.inf.puc-rio.br/har). 
+
+The entire training data set can be downloaded from [here](http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv). This is the data set I will use to train and test the model. The testing data set downloaded from [here](http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) is reserved to answer 20 excercise questions later. 
+
+``` {r load data}
+# Load training data
+# download from "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+data <- read.csv(file = "pml-training.csv", 
+                     na.strings=c("NA","NaN", " ", "", "#DIV/0!"))
+# load test data
+# download from "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+test20 <- read.csv(file = "pml-testing.csv", 
+                     na.strings=c("NA","NaN", " ", "", "#DIV/0!"))
+```
+## Summary
+
+Adapted from [Velloso et al.](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf) I used a Random Forest approach to characterized a subset of features, selected in a random and independent manner with the same distribution for each of the trees in the forest. In this project I used 4 random forests and each forest was implemented with 100 trees. To investigate if correlationed features would degrade the performance, I built two models one using all features and one with the high correlated features removed. 
+
+## Data splitting
+
+I split the data into 60% training and 40% testing. 
+
+``` {r split}
+# set random seed
+set.seed(12234)
+
+# split dataframe into training and testing sets
+# 60% of total data goes towards training and 40% of the remaining for testing
+inTrain <- createDataPartition(y = data$classe, p=0.60, list=FALSE)
+training <- data[inTrain, ]
+testing <- data[-inTrain, ]
+```
+
+## Feature extraction
+
+Only based on the training data set, I remove the features with near zero variance and high correlations. For comparision, I built two models one with the high correlated features removed and one didn't. 
+
+``` {r preprocess, cache = TRUE, fig.height = 10, fig.width = 10}
+# remove user name and other identify info
+metainfo <- training[,1:7]
+nzv <- nearZeroVar(training[,-c(1:7)])
+
+# remove near zero variance features
+trainExtract <- training[,-c(nzv,1:7)]
+
+# remove features with missing values
+trainExtract <- trainExtract[colSums(is.na(trainExtract)) == 0]
+
+# remove features high correlation (>0.75)
+par(ps=6)
+correlations <- cor(trainExtract[,-length(trainExtract)])
+corrplot.mixed(correlations, order = "hclust", tl.col="black", 
+                 tl.pos = "lt", lower = "circle", upper = "number")
+highCorr <- findCorrelation(correlations, cutoff = .75)
+print(highCorr)
+
+trainExtractNoCorr <- trainExtract[, -highCorr]
+
+# The predictors used without removing high correlated features
+names(trainExtract)
+
+# The high correlated features
+names(trainExtract)[highCorr]
+```
+
+
+## Training
+
+I built 4 random forests each with 100 trees. The importance of selected predictors are plotted. 
+
+``` {r rf, cache = TRUE,fig.height = 10, echo = FALSE}
+#control <- trainControl(method="repeatedcv", number=5, repeats=3)
+# Random Forest
+set.seed(12234)
+rfFit_withHighCor <- train(classe ~., method = "rf", data = trainExtract, 
+                 trControl = trainControl(method = "cv", number = 4), 
+                 ntree = 100, importance = TRUE)
+# visualize the relative importance of each predictor variable in the model
+varImpPlot(rfFit_withHighCor$finalModel, sort = TRUE, type = 1, pch = 19, col = 1, cex = 1,
+           main = sprintf("Relative Importance of %d Predictor Variables \nwith correlated features",nrow(rfFit_withHighCor$finalModel$importance)))
+
+# Random Forest
+set.seed(12234)
+rfFit_noHighCor <- train(classe ~., method = "rf", data = trainExtractNoCorr, 
+                 trControl = trainControl(method = "cv", number = 4), 
+                 ntree = 100, importance = TRUE)
+# visualize the relative importance of each predictor variable in the model
+varImpPlot(rfFit_noHighCor$finalModel, sort = TRUE, type = 1, pch = 19, col = 1, cex = 1,
+           main = sprintf("Relative Importance of %d Predictor Variables \nwithout correlated features",nrow(rfFit_noHighCor$finalModel$importance)))
+```
+
+```{r summary}
+# summarize results
+resamp <- resamples(list(HighCor=rfFit_withHighCor, noHighCor=rfFit_withHighCor))
+summary(resamp)
+dotplot(resamp)
+
+```
+
+Clearly these two models have not significant differences in accuracy (in-sample-error).
+
+## Testing
+
+Now I applied the two models on the rest 40% testing dataset. 
+
+``` {r test}
+# apply Random Forest model to validation set
+rfFit_validate1 <- predict(rfFit_withHighCor, testing)
+
+# generate confusion matrix for validation model
+CM1 <- confusionMatrix(testing$classe, rfFit_validate1)
+CM1$table
+CM1$overall
+
+rfFit_validate2 <- predict(rfFit_noHighCor, testing)
+
+# generate confusion matrix for validation model
+CM2 <- confusionMatrix(testing$classe, rfFit_validate2)
+CM2$table
+CM2$overall
+
+```
+
+It shows that using all predictors (excluding missing values), the accuracy is **`r CM1$overall[["Accuracy"]]`** (out-of-sample error **`r 1-CM1$overall[["Accuracy"]]`** ), comparing with **`r CM2$overall[["Accuracy"]]`** (out-of-sample error **`r 1-CM2$overall[["Accuracy"]]`** ) using less correlated predictors. Although no statistically significant difference, the accuracy is slightly higher using all predictors. 
+
+## Predict the 20 excercises
+``` {r excersize}
+test20pre <- predict(rfFit_withHighCor, test20)
+print(test20pre)
+```
+
+## Conclusions
+The goal of this project is to predict the manner in which they did the exercise. I included upto **`r dim(trainExtract)[2]-1`** variables to predict how well each excerice has been performed using 4 random forests each have 100 trees. Cross-validation was performed in eaching training and all predictors were selected randomly. The out-of-sample error for the model including all predictors is **`r 1-CM1$overall[["Accuracy"]]`**. This model will be used to predict 20 different test cases.
